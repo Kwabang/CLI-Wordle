@@ -1,0 +1,88 @@
+name: Release single-file binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.rid }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            rid: linux-x64
+            artifact: Wordle-linux-x64
+            ext: ''
+          - runner: macos-latest
+            rid: osx-arm64
+            artifact: Wordle-osx-arm64
+            ext: ''
+          - runner: macos-13
+            rid: osx-x64
+            artifact: Wordle-osx-x64
+            ext: ''
+          - runner: windows-latest
+            rid: win-x64
+            artifact: Wordle-win-x64
+            ext: '.exe'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Wordle.fsproj
+
+      - name: Publish single-file (${{ matrix.rid }})
+        run: |
+          dotnet publish Wordle.fsproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:IncludeAllContentInSingleFile=true -p:EnableCompressionInSingleFile=true -o publish/${{ matrix.rid }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p staged
+          cp publish/${{ matrix.rid }}/Wordle${{ matrix.ext }} staged/${{ matrix.artifact }}${{ matrix.ext }}
+          ls -lh staged/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: staged/${{ matrix.artifact }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
